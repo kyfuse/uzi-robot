@@ -60,11 +60,19 @@ echo "Setup complete!"
 ## Python Setup
 
 ```sh
-# Make venv
+# Make uv project and venv
+uv init
 uv venv
 uv pip install -r requirements.txt
 
 uv pip install setuptools spidev pyaudio
 
 sudo $(which python) tuning.py
+```
+
+## Temp
+
+```sh
+sudo usermod -aG i2c,gpio,dialout uzi
+uv add adafruit-blinka adafruit-circuitpython-pca9685 adafruit-circuitpython-servokit adafruit-circuitpython-bno08x
 ```
