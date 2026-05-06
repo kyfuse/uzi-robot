@@ -76,3 +76,10 @@ sudo $(which python) tuning.py
 sudo usermod -aG i2c,gpio,dialout uzi
 uv add adafruit-blinka adafruit-circuitpython-pca9685 adafruit-circuitpython-servokit adafruit-circuitpython-bno08x
 ```
+
+These pins need to be explicitly configured, ex: as GPIO, for them to work:
+
+```sh
+sudo /opt/nvidia/jetson-io/jetson-io.py
+# Set pin 35 to GPIO, enable I2C, SPI1, and UART
+```
