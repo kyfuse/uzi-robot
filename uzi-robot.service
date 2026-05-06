@@ -1,0 +1,14 @@
+[Unit]
+Description=Uzi Robot
+After=network-online.target
+
+[Service]
+Type=simple
+User=uzi
+ExecStart=/home/uzi/src/uzi-robot/test.sh
+WorkingDirectory=/home/uzi/src/uzi-robot
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
