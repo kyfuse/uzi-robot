@@ -26,7 +26,7 @@ sudo sudo snap refresh --hold snapd
 sudo apt-get install -y chromium-browser
 
 # Packages and tools
-sudo apt-get install -y fzf htop software-properties-common portaudio19-dev
+sudo apt-get install -y fzf htop software-properties-common portaudio19-dev minicom fonts-dejavu
 echo 'source /usr/share/doc/fzf/examples/key-bindings.bash' >> ~/.bashrc  # Ctrl-R history fuzzy search
 
 # Remote VNC server (remote desktop)
