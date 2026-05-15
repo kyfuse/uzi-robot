@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 
 _led = digitalio.DigitalInOut(LED)
 _led.direction = digitalio.Direction.OUTPUT
+_led.value = False
 
 
 def set(value: bool) -> None:

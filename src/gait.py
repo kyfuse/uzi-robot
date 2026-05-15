@@ -13,7 +13,7 @@ L1 = 5.0  # thigh
 L2 = 5.7  # shin
 
 # Gait parameters
-STEP_HEIGHT = 10.0  # nominal hip-to-foot distance while standing
+STEP_HEIGHT = 10.6  # nominal hip-to-foot distance while standing
 STEP_CLEARANCE = 1.0  # how far swing foot lifts
 
 

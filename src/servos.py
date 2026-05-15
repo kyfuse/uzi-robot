@@ -1,6 +1,7 @@
 """Provides servo control via the PCA9685 servo driver."""
 
 import logging
+import time
 
 from adafruit_servokit import ServoKit
 
@@ -46,14 +47,23 @@ def reset_all() -> None:
     log.debug("Reset all servos to the standing position")
 
 
-def set_angle(servo_num: int, angle: float) -> None:
+def set_angle(servo_num: int, angle: float, gradual=False) -> None:
     """Sets the angle of a servo. 0 is standing."""
     if servo_num not in _SERVOS:
         raise ValueError(f"Invalid servo number: {servo_num}")
     if angle < -80 or angle > 80:
         raise ValueError(f"Angle must be between -80 and 80, got {angle}")
     raw_angle = _CALIBRATED_ZERO_ANGLES[servo_num] + angle * _DIRECTION[servo_num]
-    _kit.servo[servo_num].angle = raw_angle
+    if gradual:
+        prev_angle = _kit.servo[servo_num].angle
+        curr_angle = prev_angle
+        while abs(curr_angle - raw_angle) > 1:
+            print(f"Moving servo {servo_num} from {prev_angle} to {curr_angle}")
+            curr_angle += (raw_angle - prev_angle) * 0.05
+            _kit.servo[servo_num].angle = curr_angle
+            time.sleep(0.01)
+    else:
+        _kit.servo[servo_num].angle = raw_angle
     log.debug(f"Moved servo {servo_num} to {angle} degrees (raw: {raw_angle} degrees)")
 
 
