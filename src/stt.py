@@ -2,14 +2,12 @@
 
 import logging
 import queue
-import struct
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
+import numpy as np
 import sherpa_onnx
 import sounddevice as sd
-import usb.core
-import usb.util
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +20,7 @@ def start(on_utterance: Callable[[str, bool], None]) -> None:
     _thread.start()
     _stream_in = sd.InputStream(
         channels=_RESPEAKER_CHANNELS,
+        # channels=1,
         samplerate=_SR,
         dtype="float32",
         blocksize=320,
@@ -37,22 +36,6 @@ def mute() -> None:
 
 def unmute() -> None:
     _muted.clear()
-
-
-def is_voice() -> Optional[bool]:
-    """ReSpeaker's onboard VAD. True if it currently hears voice. None if the device isn't reachable."""
-    val = _read_tuning_param(*_PARAM_VOICEACTIVITY)
-    return None if val is None else bool(val)
-
-
-def direction() -> Optional[int]:
-    """ReSpeaker's direction-of-arrival in degrees [0, 360). None if the device isn't reachable."""
-    return _read_tuning_param(*_PARAM_DOAANGLE)
-
-
-def set_vad_threshold(value: float) -> bool:
-    """Set ReSpeaker GAMMAVAD_SR (default 15, lower = more sensitive). Caution: aggressive values can mute the processed channel; reset with 15 if STT goes silent."""
-    return _write_tuning_param(*_PARAM_GAMMAVAD_SR, value)
 
 
 def stop() -> None:
@@ -75,14 +58,6 @@ _SR = 16000
 _RESPEAKER_CHANNELS = 6
 _PROCESSED_CH = 0
 
-# ReSpeaker USB 4-mic Array (XMOS XVF-3000) USB IDs and tuning protocol bits.
-_RESPEAKER_VID = 0x2886
-_RESPEAKER_PID = 0x0018
-_TUNING_TIMEOUT_MS = 100000
-# (param_id, offset, is_int) for the params we touch.
-_PARAM_VOICEACTIVITY = (19, 32, True)
-_PARAM_DOAANGLE = (21, 0, True)
-_PARAM_GAMMAVAD_SR = (19, 39, False)
 
 _rec: sherpa_onnx.OnlineRecognizer | None = None
 _audio_q: queue.Queue = queue.Queue(maxsize=1000)
@@ -90,71 +65,6 @@ _stop = threading.Event()
 _muted = threading.Event()
 _thread: threading.Thread | None = None
 _stream_in: sd.InputStream | None = None
-_tuning_dev: Optional[usb.core.Device] = None
-_tuning_lock = threading.Lock()
-
-
-def _get_tuning_dev() -> Optional[usb.core.Device]:
-    """Find the ReSpeaker tuning USB endpoint. Cached, returns None if absent."""
-    global _tuning_dev
-    if _tuning_dev is not None:
-        return _tuning_dev
-    try:
-        _tuning_dev = usb.core.find(idVendor=_RESPEAKER_VID, idProduct=_RESPEAKER_PID)
-    except Exception:
-        log.error("ReSpeaker tuning USB lookup failed", exc_info=True)
-        _tuning_dev = None
-    if _tuning_dev is None:
-        log.warning("ReSpeaker tuning device not found; VAD/DOA unavailable")
-    return _tuning_dev
-
-
-def _read_tuning_param(param_id: int, offset: int, is_int: bool) -> Optional[int]:
-    """Read one ReSpeaker DSP parameter via vendor USB control transfer."""
-    dev = _get_tuning_dev()
-    if dev is None:
-        return None
-    cmd = 0x80 | offset | (0x40 if is_int else 0)
-    try:
-        with _tuning_lock:
-            response = dev.ctrl_transfer(
-                usb.util.CTRL_IN | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
-                0,
-                cmd,
-                param_id,
-                8,
-                _TUNING_TIMEOUT_MS,
-            )
-        value, exp = struct.unpack(b"ii", response.tobytes())
-    except Exception:
-        log.error("ReSpeaker tuning read failed", exc_info=True)
-        return None
-    return value if is_int else int(value * (2.0**exp))
-
-
-def _write_tuning_param(param_id: int, offset: int, is_int: bool, value) -> bool:
-    """Write one ReSpeaker DSP parameter via vendor USB control transfer."""
-    dev = _get_tuning_dev()
-    if dev is None:
-        return False
-    if is_int:
-        payload = struct.pack(b"iii", offset, int(value), 1)
-    else:
-        payload = struct.pack(b"ifi", offset, float(value), 0)
-    try:
-        with _tuning_lock:
-            dev.ctrl_transfer(
-                usb.util.CTRL_OUT | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
-                0,
-                0,
-                param_id,
-                payload,
-                _TUNING_TIMEOUT_MS,
-            )
-    except Exception:
-        log.error("ReSpeaker tuning write failed", exc_info=True)
-        return False
-    return True
 
 
 def _build_recognizer() -> sherpa_onnx.OnlineRecognizer:
@@ -178,6 +88,7 @@ def _audio_cb(indata, frames, t, status):
         return
     try:
         _audio_q.put_nowait(indata[:, _PROCESSED_CH].copy())
+        # _audio_q.put_nowait(indata[:, 0].copy())
     except queue.Full:
         log.warning("ASR queue full, dropping audio chunk")
 
@@ -248,3 +159,10 @@ def _worker(on_utterance: Callable[[str, bool], None]) -> None:
             except Exception:
                 log.error("STT reset failed after endpoint")
             last = ""
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
+    start(on_utterance=lambda text, is_final: print(f"UTT: {text!r} {'FINAL' if is_final else 'PARTIAL'}"))
+    threading.Event().wait()

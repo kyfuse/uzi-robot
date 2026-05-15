@@ -1,14 +1,13 @@
 """Main entry point for Uzi."""
 
 import logging
-import subprocess
 import threading
 import time
 
 import colorlog
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw
 
+import audio
 import brain
 import display
 import gait
@@ -45,31 +44,6 @@ setup_logging()
 
 log = logging.getLogger("uzi")
 should_walk = threading.Event()
-
-
-def setup_audio():
-    """Sets up the default audio sink and source."""
-    subprocess.run(
-        ["pactl", "set-default-sink", "alsa_output.usb-Jieli_Technology_UACDemoV1.0_4150344C3631390E-00.iec958-stereo"],
-        check=True,
-    )
-    subprocess.run(
-        ["pactl", "set-default-source", "alsa_input.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00.multichannel-input"],
-        check=True,
-    )
-    log.info("Audio setup complete")
-
-
-def set_speaker_volume(percent: int = 100, card: int = 1, control: str = "PCM") -> None:
-    """Set ALSA playback volume on the USB DAC (card 1, control PCM)."""
-    try:
-        subprocess.run(
-            ["amixer", "-q", "-c", str(card), "sset", control, f"{percent}%"],
-            check=True,
-        )
-        log.info(f"Set card {card} {control} volume to {percent}%")
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log.warning(f"Could not set speaker volume: {e}")
 
 
 def walk_test():
@@ -126,16 +100,16 @@ def robot_stop():
 
 
 def walk():
-    servos.set_angle(servos.RIGHT_HIP, -20)
-    servos.set_angle(servos.RIGHT_KNEE, -20)
+    servos.set_angle(servos.RIGHT_HIP, -35)
+    servos.set_angle(servos.RIGHT_KNEE, -35)
     servos.set_angle(servos.RIGHT_ANKLE, 0)
     time.sleep(0.25)
     servos.set_angle(servos.RIGHT_HIP, 0)
     servos.set_angle(servos.RIGHT_KNEE, 0)
     servos.set_angle(servos.RIGHT_ANKLE, 0)
     time.sleep(0.25)
-    servos.set_angle(servos.LEFT_HIP, -20)
-    servos.set_angle(servos.LEFT_KNEE, -20)
+    servos.set_angle(servos.LEFT_HIP, -35)
+    servos.set_angle(servos.LEFT_KNEE, -35)
     servos.set_angle(servos.LEFT_ANKLE, 0)
     time.sleep(0.25)
     servos.set_angle(servos.LEFT_HIP, 0)
@@ -168,16 +142,14 @@ def main():
     # walk_test()
     # return
 
-    setup_audio()
-    set_speaker_volume(95)
-    stt.set_vad_threshold(3)
-
     # Start modules
+    audio.setup()
     stt.start(on_utterance=brain.on_utterance)
     brain.set_tool_handler("move_forward", robot_move_forward)
     brain.set_tool_handler("stop", robot_stop)
     brain.set_tool_handler("stay_silent", lambda: "ok")
     tts.start(on_amplitude=display.draw_face)
+    brain.prewarm()
     brain.start(on_speak=tts.speak)
 
     servos.reset_all()
@@ -192,12 +164,12 @@ def main():
     led.set(True)
 
     # imu._run_imu_thread()
-    for i in range(100):
-        if stt.is_voice() is not None:
-            log.info(f"Voice detected: {stt.is_voice()}")
-        if stt.direction() is not None:
-            log.info(f"Direction: {stt.direction()}")
-        time.sleep(0.1)
+    # for i in range(100):
+    #     if stt.is_voice() is not None:
+    #         log.info(f"Voice detected: {stt.is_voice()}")
+    #     if stt.direction() is not None:
+    #         log.info(f"Direction: {stt.direction()}")
+    #     time.sleep(0.1)
 
     try:
         threading.Event().wait()  # block forever; Ctrl+C to exit

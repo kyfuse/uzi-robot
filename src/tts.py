@@ -187,7 +187,8 @@ if __name__ == "__main__":
     load_dotenv()
     logging.basicConfig(level=logging.INFO)
 
-    start(on_amplitude=lambda a: print(f"amp={a:.2f}"))
+    start(on_amplitude=lambda a: None)
+    # start(on_amplitude=lambda a: print(f"amp={a:.2f}"))
     speak("Hey! I'm Uzi.")
     speak("[snarky] Bite me.")
     speak("What do you mean we're out of acid?!")
