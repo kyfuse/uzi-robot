@@ -150,7 +150,7 @@ def main():
     brain.set_tool_handler("stay_silent", lambda: "ok")
     tts.start(on_amplitude=display.draw_face)
     brain.prewarm()
-    brain.start(on_speak=tts.speak)
+    brain.start(on_speak=tts.speak, on_speak_cancel=tts.interrupt)
 
     servos.reset_all()
     display.clear()

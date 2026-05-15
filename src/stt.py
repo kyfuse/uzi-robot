@@ -84,11 +84,12 @@ def _build_recognizer() -> sherpa_onnx.OnlineRecognizer:
 def _audio_cb(indata, frames, t, status):
     if status:
         log.warning(f"Audio status: {status}")
-    if _muted.is_set():
-        return
     try:
-        _audio_q.put_nowait(indata[:, _PROCESSED_CH].copy())
-        # _audio_q.put_nowait(indata[:, 0].copy())
+        if _muted.is_set():
+            # Put silence into the queue to keep the buffer filled
+            _audio_q.put_nowait(np.zeros(frames, dtype=np.float32))
+        else:
+            _audio_q.put_nowait(indata[:, _PROCESSED_CH].copy())
     except queue.Full:
         log.warning("ASR queue full, dropping audio chunk")
 
@@ -101,27 +102,7 @@ def _worker(on_utterance: Callable[[str, bool], None]) -> None:
     log.info("STT worker ready")
 
     last = ""
-    was_muted = False
     while not _stop.is_set():
-        if _muted.is_set():
-            if not was_muted:
-                was_muted = True
-                while True:
-                    try:
-                        _audio_q.get_nowait()
-                    except queue.Empty:
-                        break
-                try:
-                    _rec.reset(stream)
-                except Exception:
-                    log.error("STT reset failed on mute")
-                last = ""
-            try:
-                _audio_q.get(timeout=0.1)
-            except queue.Empty:
-                pass
-            continue
-        was_muted = False
         try:
             chunk = _audio_q.get(timeout=0.1)
         except queue.Empty:
@@ -137,11 +118,14 @@ def _worker(on_utterance: Callable[[str, bool], None]) -> None:
         if not text:
             continue
         if text != last:
-            log.info(f"Partial: {text!r}")
-            try:
-                on_utterance(text, False)
-            except Exception:
-                log.error("on_utterance callback failed for partial")
+            if _muted.is_set():
+                log.info(f"Skipping partial: {text!r}")
+            else:
+                log.info(f"Partial: {text!r}")
+                try:
+                    on_utterance(text, False)
+                except Exception:
+                    log.error("on_utterance callback failed for partial")
             last = text
         try:
             is_endpoint = _rec.is_endpoint(stream)
@@ -149,11 +133,14 @@ def _worker(on_utterance: Callable[[str, bool], None]) -> None:
             log.error("STT endpoint detection failed")
             is_endpoint = False
         if is_endpoint and text.strip() != "Okay." and text.strip() != "Okay?":  # Weird case when there's silence
-            log.info(f"Final: {text!r}")
-            try:
-                on_utterance(text, True)
-            except Exception:
-                log.error("on_utterance callback failed for final")
+            if _muted.is_set():
+                log.info(f"Skipping final: {text!r}")
+            else:
+                log.info(f"Final: {text!r}")
+                try:
+                    on_utterance(text, True)
+                except Exception:
+                    log.error("on_utterance callback failed for final")
             try:
                 _rec.reset(stream)
             except Exception:

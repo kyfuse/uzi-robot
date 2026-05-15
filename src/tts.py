@@ -71,6 +71,23 @@ def speak(text: str) -> None:
         _q.put(text)
 
 
+def interrupt() -> None:
+    """Drop everything queued and currently playing. Safe to call from any thread.
+
+    Sets `_interrupt` so the worker bails out of any in-progress synthesis loop
+    and play-out wait, drains the text queue, and clears the audio buffer so
+    the speaker falls silent within ~one audio callback.
+    """
+    _interrupt.set()
+    while True:
+        try:
+            _q.get_nowait()
+        except queue.Empty:
+            break
+    with _pcm_lock:
+        _pcm_buf.clear()
+
+
 _UZI_VOICE_ID = "dbfcbb173fb84528ac4ccaf446026277"
 _SAMPLE_RATE = 44100  # Fish PCM default
 _TAIL_SECONDS = 0.2  # extra grace after buffer drains, before re-arming STT
@@ -80,6 +97,7 @@ _MOUTH_FPS = 60
 
 _q: "queue.Queue[str]" = queue.Queue()
 _stop = threading.Event()
+_interrupt = threading.Event()
 _thread: threading.Thread | None = None
 _mouth_thread: threading.Thread | None = None
 _stream_out: sd.OutputStream | None = None
@@ -93,8 +111,6 @@ _latest_amp: float = 0.0  # written by audio callback, read by mouth thread
 def _audio_cb(outdata, frames: int, time_info, status) -> None:
     """Real-time audio callback. Pulls PCM from `_pcm_buf` and measures loudness."""
     global _latest_amp
-    if status:
-        log.warning(f"TTS output status: {status}")
     needed = frames * 2  # int16 mono
     with _pcm_lock:
         take = min(len(_pcm_buf), needed)
@@ -102,6 +118,10 @@ def _audio_cb(outdata, frames: int, time_info, status) -> None:
         del _pcm_buf[:take]
     if take < needed:
         chunk += b"\x00" * (needed - take)
+    # Underflow is expected when we're padding silence between utterances; only
+    # warn if we actually had audio to deliver this callback.
+    if status and not (status.output_underflow and take < needed):
+        log.warning(f"TTS output status: {status}")
     samples = np.frombuffer(chunk, dtype=np.int16)
     outdata[:, 0] = samples
     if take > 0:
@@ -148,12 +168,21 @@ def _pcm_buf_len() -> int:
         return len(_pcm_buf)
 
 
+def _prewarm(api_key: str) -> None:
+    log.info("Pre-warming TTS...")
+    session = WebSocketSession(api_key)
+    session.tts(_build_request(), iter(["Bite", "me!"]))
+    session.close()
+    log.info("TTS pre-warmed")
+
+
 def _worker() -> None:
     log.info("Starting TTS worker...")
     api_key = os.environ.get("FISH_API_KEY")
     if not api_key:
         log.error("FISH_API_KEY is not set; TTS worker exiting")
         return
+    _prewarm(api_key)
     session = WebSocketSession(api_key)
     log.info("TTS worker ready")
 
@@ -164,20 +193,29 @@ def _worker() -> None:
             continue
         if not text or _stop.is_set():
             continue
+        # Reset the interrupt flag for this fresh utterance. Any interrupt()
+        # call that lands later will set it again and bail us out.
+        _interrupt.clear()
         log.info(f"TTS: {text!r}")
         stt.mute()
         try:
             for chunk in session.tts(_build_request(), iter([text])):
-                if _stop.is_set():
+                if _stop.is_set() or _interrupt.is_set():
                     break
                 with _pcm_lock:
                     _pcm_buf.extend(chunk)
-            while not _stop.is_set() and _pcm_buf_len() > 0:
+            while not _stop.is_set() and not _interrupt.is_set() and _pcm_buf_len() > 0:
                 time.sleep(0.02)
         except Exception:
             log.error("TTS synthesis failed", exc_info=True)
         finally:
-            time.sleep(_TAIL_SECONDS)
+            if _interrupt.is_set():
+                # Make sure no late-arriving chunk lingers, and skip the tail
+                # grace so STT can capture the user's continued speech ASAP.
+                with _pcm_lock:
+                    _pcm_buf.clear()
+            else:
+                time.sleep(_TAIL_SECONDS)
             stt.unmute()
 
 

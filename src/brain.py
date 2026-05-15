@@ -47,17 +47,51 @@ _TOOLS = [
     },
 ]
 
-_q: queue.Queue[str] = queue.Queue()
+_q: "queue.Queue[tuple[int, str]]" = queue.Queue()
 _history: list = []
 _on_speak: Optional[Callable[[str], None]] = None
+_on_speak_cancel: Optional[Callable[[], None]] = None
 _tool_handlers: dict = {}
 _thread: Optional[threading.Thread] = None
+
+# Interrupt bookkeeping. Every utterance (partial or final) bumps `_generation`;
+# any in-flight `_handle` whose generation is no longer current must NOT speak
+# or commit to `_history`. `_inflight_user_text` accumulates user text from
+# cancelled turns so the next successful turn sees the concatenated request.
+_state_lock = threading.Lock()
+_generation: int = 0
+_inflight_user_text: str = ""
 
 
 def on_utterance(text: str, is_final: bool) -> None:
     """Pass this to stt.start()."""
-    if is_final and text.strip():
-        _q.put(text.strip())
+    global _generation, _inflight_user_text
+    text = text.strip()
+    if not text:
+        return
+
+    with _state_lock:
+        _generation += 1
+
+    # Any pending or in-progress TTS belongs to a now-stale turn; drop it
+    # immediately so the speaker stops and STT can hear the user continue.
+    if _on_speak_cancel is not None:
+        try:
+            _on_speak_cancel()
+        except Exception:
+            log.error("[brain] on_speak_cancel failed", exc_info=True)
+
+    if not is_final:
+        # Partial: just invalidate the in-flight turn. The final will carry the
+        # actual text to concatenate.
+        return
+
+    with _state_lock:
+        _inflight_user_text = (_inflight_user_text + " " + text).strip() if _inflight_user_text else text
+        gen = _generation
+        combined = _inflight_user_text
+    log.info(f"[brain] queue gen={gen}: {combined!r}")
+    _q.put((gen, combined))
 
 
 def set_tool_handler(name: str, fn: Callable) -> None:
@@ -71,33 +105,59 @@ def prewarm():
     log.info(f"Prewarm result: {result}")
 
 
-def start(on_speak: Callable[[str], None]) -> None:
-    """Start the brain thread. on_speak(text) is called for each reply."""
-    global _thread, _on_speak
+def start(on_speak: Callable[[str], None], on_speak_cancel: Optional[Callable[[], None]] = None) -> None:
+    """Start the brain thread.
+
+    on_speak(text) is called for each reply. on_speak_cancel(), if provided, is
+    invoked whenever the user speaks again before the current reply has been
+    issued — it should drop any queued/in-progress TTS so the robot stops mid-
+    sentence and the user can hear themselves think.
+    """
+    global _thread, _on_speak, _on_speak_cancel
     _on_speak = on_speak
+    _on_speak_cancel = on_speak_cancel
     _thread = threading.Thread(target=_worker, daemon=True, name="brain")
     _thread.start()
+
+
+def _is_stale(gen: int) -> bool:
+    with _state_lock:
+        return gen != _generation
 
 
 def _worker() -> None:
     log.info("Brain thread started")
     while True:
-        text = _q.get()
+        gen, text = _q.get()
+        if _is_stale(gen):
+            log.info(f"[brain] skipping stale gen={gen}: {text!r}")
+            continue
         try:
-            _handle(text)
+            _handle(gen, text)
         except Exception as e:
             log.error(f"[brain] {e}")
-            if _on_speak:
+            if not _is_stale(gen) and _on_speak:
                 _on_speak("Ugh. Brain glitch. Try that again.")
 
 
-def _handle(user_text: str) -> None:
-    _history.append({"role": "user", "content": user_text})
-    del _history[:-_HISTORY_CAP]
+def _handle(gen: int, user_text: str) -> None:
+    """Run one turn for `user_text`. Only commits history / speaks if still current."""
+    global _inflight_user_text
+
+    # Build the turn's messages locally; commit to _history only on success so a
+    # cancelled turn leaves no trace and the next attempt sees a clean slate.
+    turn_msgs: list = [{"role": "user", "content": user_text}]
 
     for _ in range(_MAX_TURNS):
-        msg = _call([{"role": "system", "content": _SYSTEM}, *_history])
-        _history.append(msg)
+        if _is_stale(gen):
+            log.info(f"[brain] aborting stale turn gen={gen}")
+            return
+
+        msg = _call([{"role": "system", "content": _SYSTEM}, *_history, *turn_msgs])
+        if _is_stale(gen):
+            log.info(f"[brain] dropping reply for stale gen={gen}")
+            return
+        turn_msgs.append(msg)
 
         silent = False
         if tcs := msg.get("tool_calls"):
@@ -114,7 +174,7 @@ def _handle(user_text: str) -> None:
 
                 # Tool messages must always be strings for OpenRouter.
                 tool_content = "ok" if tool_result is None else str(tool_result)
-                _history.append(
+                turn_msgs.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -127,8 +187,25 @@ def _handle(user_text: str) -> None:
             break
 
         if (c := msg.get("content", "")) and c.strip() and _on_speak:
+            # Atomically commit so a racing utterance can't slip between the
+            # staleness check and the speak() call.
+            with _state_lock:
+                if gen != _generation:
+                    log.info(f"[brain] dropping reply for stale gen={gen} (race)")
+                    return
+                _history.extend(turn_msgs)
+                del _history[:-_HISTORY_CAP]
+                _inflight_user_text = ""
             _on_speak(c)
-            break
+            return
+
+    # No speakable content was produced (e.g. stay_silent, or exhausted turns).
+    # Still commit so the conversation history reflects what happened.
+    with _state_lock:
+        if gen == _generation:
+            _history.extend(turn_msgs)
+            del _history[:-_HISTORY_CAP]
+            _inflight_user_text = ""
 
 
 def _call(messages: list) -> dict:
