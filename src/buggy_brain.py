@@ -94,9 +94,7 @@ _speculation_promoted: bool = False
 # "[stay silent]", "[stay_silent]", "[silent output]". The model sometimes
 # emits these instead of actually invoking the stay_silent tool. Underscores
 # (and other non-letters) count as boundaries so "stay_silent" matches.
-_SILENT_CUE_RE = re.compile(
-    r"^\[[^\]]*(?<![a-z])silent(?![a-z])[^\]]*\]$", re.IGNORECASE
-)
+_SILENT_CUE_RE = re.compile(r"^\[[^\]]*(?<![a-z])silent(?![a-z])[^\]]*\]$", re.IGNORECASE)
 
 # Used to compare a partial's input text to the eventual final's text. STT
 # can tack on trailing punctuation (e.g. "hey" → "hey.") between the last
@@ -267,29 +265,34 @@ def _worker() -> None:
             if is_final:
                 _handle(gen, text)
             else:
-                if _handle_speculation(gen, text):
+                spec_msg = _handle_speculation(gen, text)
+                if spec_msg is not None:
                     # Spec was promoted but its reply wasn't directly
-                    # speakable (tool calls / silent cue). Run the proper
-                    # multi-turn final flow now.
+                    # speakable (tool calls / silent cue). Continue the
+                    # multi-turn flow from the spec's reply itself — re-asking
+                    # the LLM with the same input wastes a call and can land
+                    # on a different decision (tool_calls vs no tool_calls).
                     treat_as_final = True
-                    _handle(gen, text)
+                    _handle(gen, text, initial_msg=spec_msg)
         except Exception as e:
             log.error(f"{e}")
             if treat_as_final and not _is_stale(gen) and _on_speak:
                 _on_speak("Ugh. Brain glitch. Try that again.")
 
 
-def _handle_speculation(gen: int, user_text: str) -> bool:
+def _handle_speculation(gen: int, user_text: str) -> Optional[dict]:
     """Run a single speculative LLM turn.
 
-    Returns True if the caller should follow up by running `_handle(gen,
-    user_text)`: the speculation was promoted to a final mid-flight, but its
-    reply involved tool calls or a silent cue and so can't be spoken
-    directly. Returns False otherwise (cached, dropped, or already spoken).
+    Returns the spec's reply `msg` if the caller should continue running it
+    via `_handle(gen, user_text, initial_msg=msg)`: the speculation was
+    promoted but its reply involved tool calls or a silent cue, so we hand
+    the same `msg` off to `_handle` (which executes the tools and continues
+    the multi-turn loop) instead of issuing a second redundant LLM call.
+    Returns None otherwise (cached, dropped, or already spoken).
 
     Speculative calls execute zero side effects: tool calls and silent cues
     are never run from this path. They're either ignored (not promoted) or
-    deferred to a fresh `_handle` (promoted).
+    handed off to `_handle` for execution (promoted).
     """
     global _cached_speculation, _active_speculation, _speculation_promoted, _inflight_user_text
 
@@ -298,7 +301,7 @@ def _handle_speculation(gen: int, user_text: str) -> bool:
     # promoted). Don't touch them here — the worker isn't their owner until
     # the final lock below confirms we're still the current spec.
     if _is_stale(gen):
-        return False
+        return None
 
     error: Optional[BaseException] = None
     msg: dict = {}
@@ -314,14 +317,14 @@ def _handle_speculation(gen: int, user_text: str) -> bool:
         error = e
 
     speak_content: Optional[str] = None
-    rerun = False
+    rerun_msg: Optional[dict] = None
 
     with _state_lock:
         if gen != _generation:
             # A partial slipped in while we were waiting on the LLM. Active
             # and promoted now belong to the newer spec; don't touch them.
             log.info(f"Dropping speculation reply for stale gen={gen}")
-            return False
+            return None
 
         # We're still current → we own active/promoted and clear them.
         promoted = _speculation_promoted
@@ -347,9 +350,10 @@ def _handle_speculation(gen: int, user_text: str) -> bool:
                     _inflight_user_text = ""
                     speak_content = content
                 else:
-                    # Tool calls / silent cues need real execution; defer to
-                    # `_handle` outside the lock.
-                    rerun = True
+                    # Hand the spec's msg off to `_handle` so its tool calls
+                    # / silent cue can be executed (and any text content
+                    # spoken alongside) without a second LLM call.
+                    rerun_msg = msg
             else:
                 if speakable:
                     _cached_speculation = (user_text, msg)
@@ -365,28 +369,38 @@ def _handle_speculation(gen: int, user_text: str) -> bool:
             log.info(f"Speaking promoted speculation gen={gen}: {user_text!r} -> {speak_content!r}")
         _on_speak(speak_content)
 
-    if rerun:
-        log.info(f"Speculation gen={gen} promoted but not directly speakable; rerunning as final")
-    return rerun
+    if rerun_msg is not None:
+        log.info(f"Speculation gen={gen} promoted; handing spec msg to _handle (no rerun)")
+    return rerun_msg
 
 
-def _handle(gen: int, user_text: str) -> None:
-    """Run one turn for `user_text`. Only commits history / speaks if still current."""
+def _handle(gen: int, user_text: str, initial_msg: Optional[dict] = None) -> None:
+    """Run one turn for `user_text`. Only commits history / speaks if still current.
+
+    If `initial_msg` is given, the first iteration uses it instead of issuing
+    its own LLM call — used by the speculation path to reuse a reply that
+    came back with tool calls / a silent cue rather than re-rolling the LLM.
+    """
     global _inflight_user_text
 
     # Build the turn's messages locally; commit to _history only on success so a
     # cancelled turn leaves no trace and the next attempt sees a clean slate.
     turn_msgs: list = [{"role": "user", "content": user_text}]
+    pending: Optional[dict] = initial_msg
 
     for _ in range(_MAX_TURNS):
         if _is_stale(gen):
             log.info(f"Aborting stale turn gen={gen}")
             return
 
-        msg = _call([{"role": "system", "content": _SYSTEM}, *_history, *turn_msgs])
-        if _is_stale(gen):
-            log.info(f"Dropping reply for stale gen={gen}")
-            return
+        if pending is not None:
+            msg = pending
+            pending = None
+        else:
+            msg = _call([{"role": "system", "content": _SYSTEM}, *_history, *turn_msgs])
+            if _is_stale(gen):
+                log.info(f"Dropping reply for stale gen={gen}")
+                return
         turn_msgs.append(msg)
 
         silent = False
@@ -463,7 +477,8 @@ def _call(messages: list) -> dict:
                 "messages": messages,
                 "tools": _TOOLS,
                 "provider": {
-                    # "sort": {"by": "price", "partition": "none"},
+                    "require_parameters": True,
+                    "sort": "latency",
                     # Prioritize low latency for real-time voice
                     "preferred_max_latency": {
                         "p90": 1.5,
@@ -472,8 +487,6 @@ def _call(messages: list) -> dict:
                     "preferred_min_throughput": {
                         "p90": 15,
                     },
-                    # Sort by model latency
-                    "sort": "latency",
                 },
             },
             timeout=60,

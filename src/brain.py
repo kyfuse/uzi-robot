@@ -242,7 +242,8 @@ def _call(messages: list) -> dict:
                 "messages": messages,
                 "tools": _TOOLS,
                 "provider": {
-                    "sort": {"by": "price", "partition": "none"},
+                    "require_parameters": True,
+                    "sort": "latency",
                     # Prioritize low latency for real-time voice
                     "preferred_max_latency": {
                         "p90": 1.5,

@@ -2,21 +2,6 @@
 
 ![Uzi](img/uzi.png)
 
-def _ik(x: float, z: float) -> tuple[float, float, float]:
-    """
-    Given a desired foot position in a 2D frame, computes the (hip, knee, ankle) joint angles to achieve it, such that
-    the hip angle is positive (hip goes forward). Joint angles are traced from the top down, with CCW angles as
-    positive. The straight, standing pose is (0, 0, 0).
-
-    x and z are the forward and downward foot offsets from the hip joint, respectively.
-    """
-    d = math.sqrt(x**2 + z**2)
-    theta_1 = math.acos((L2**2 + d**2 - L1**2) / (2 * L2 * d))
-    theta_2 = math.acos((L1**2 + d**2 - L2**2) / (2 * L1 * d))
-    theta_d = 2 * math.pi - theta_1 - theta_2
-    theta_x = math.atan2(x, z)
-    theta_hip = theta_2 + 
-
 Uzi from Murder Drones, but in real life (with less murdering).
 
 Modules:
@@ -195,6 +180,18 @@ sudo /opt/nvidia/jetson-io/jetson-io.py
 
 ## Run
 
+NOTE: You'll need OpenRouter and Fish Audio API keys:
+
+- [https://openrouter.ai/](https://openrouter.ai/) (Pay-as-you-go, can expect the cost to be very small, under 50 cents for playing around though)
+- [https://fish.audio/app/api-keys/](https://fish.audio/app/api-keys/) (Students can get free credit)
+
+Make a `.env` file at the repo root with:
+
+```text
+OPENROUTER_API_KEY=<Your API key>
+FISH_API_KEY=<Your API key>
+```
+
 The setup script installs a systemd service that runs while the Jetson is on, auto-starting Uzi.
 
 Disable/enable auto-start:
@@ -206,62 +203,3 @@ Start Uzi manually (without the systemd service):
 ```
 uv run src/main.py
 ```
-
-```
-# Expose raw 6-channel output of the ReSpeaker microphone
-wpctl set-profile pactl set-card-profile alsa_card.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00 pro-audio
-
-# Set default sink (speaker) for ALSA
-cat > ~/.asoundrc <<'EOF'
-pcm.!default {
-    type pipewire
-    playback_node "-1"
-    capture_node "-1"
-    hint { show on description "PipeWire" }
-}
-ctl.!default {
-    type pipewire
-}
-EOF
-
-# Set default source (mic) for PipeWire
-pactl set-default-source alsa_input.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00.pro-input-0
-```
-
-sudo vim /usr/share/wireplumber/main.lua.d/60-custom-config.lua
-
-alsa_monitor.rules = alsa_monitor.rules or {}
-
-table.insert(alsa_monitor.rules, {
-    matches = {
-      {
-        { "device.name", "matches", "alsa_card.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00" },
-      },
-    },
-    apply_properties = {
-      -- ["api.alsa.use-acp"] = true,
-      -- ["device.profile"] = "pro-audio",
-    }
-})
-
-vim ~/.config/pipewire/pipewire.conf.d/98-respeaker-mono-loopback.conf
-
-context.modules = [
-  { name = libpipewire-module-loopback
-    args = {
-      node.description = "ReSpeaker Mono Loopback"
-      capture.props = {
-        audio.position = [ AUX0 ]
-        stream.dont-remix = true
-        node.target = "alsa_input.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00.pro-input-0"
-        node.passive = true
-      }
-      playback.props = {
-        node.name = "respeaker_mono_in"
-        media.class = "Audio/Source"
-        audio.position = [ MONO ]
-      }
-    }
-  }
-]
-

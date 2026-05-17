@@ -16,6 +16,9 @@ log = util.get_logger(__name__)
 # How often to poll the ReSpeaker for VAD/DOA, in seconds.
 _POLL_INTERVAL_S = 0.1
 
+# _SPEAKER_VOLUME_PERCENT = 95
+_SPEAKER_VOLUME_PERCENT = 90
+
 # ReSpeaker parameters (param_id, offset, is_int)
 _PARAM_VOICEACTIVITY = (19, 32, True)
 _PARAM_DOAANGLE = (21, 0, True)
@@ -54,7 +57,7 @@ def _init():
         check=True,
     )
     subprocess.run(
-        ["pactl", "set-sink-volume", _USB_SPEAKER_STEREO_OUTPUT, "95%"],
+        ["pactl", "set-sink-volume", _USB_SPEAKER_STEREO_OUTPUT, f"{_SPEAKER_VOLUME_PERCENT}%"],
         check=True,
     )
     _set_respeaker_vad_threshold(3)

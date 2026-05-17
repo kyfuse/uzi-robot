@@ -16,11 +16,15 @@ import util
 
 log = util.get_logger(__name__)
 
+# Configure these until the robot walks straight
+# STEP_LENGTH = 0.75
+LEFT_STEP_LENGTH = 0.5  # Left foot travel from either side of center (cm)
+RIGHT_STEP_LENGTH = 1.5  # Right foot travel from either side of center (cm)
+
 # Gait parameters
 STAND_OFFSET_X = -0.75  # Foot position offset from center (cm)
 STAND_HEIGHT = 10.2  # Hip-to-foot distance while standing (cm)
 STEP_CLEARANCE = 0.5  # Highest distance that the swing foot lifts (cm)
-STEP_LENGTH = 0.75  # Forward foot travel from either side of center (cm)
 STEP_VELOCITY = 0.04  # Time between IK substeps (s)
 SUBSTEPS = 8  # IK samples per swing phase; one cycle has 2*substeps frames
 
@@ -104,16 +108,19 @@ def take_step() -> None:
     """One full gait cycle: right foot swing, then left foot swing."""
     # Phase 1: Right plants and pushes back, left swings forward (lifted)
     for k in range(SUBSTEPS + 1):
-        i = STEP_LENGTH - 2 * STEP_LENGTH * k / SUBSTEPS  # Sweeps from +L to -L inclusive
-        set_foot_pos(RIGHT_FOOT, i + STAND_OFFSET_X, STAND_HEIGHT)
-        set_foot_pos(LEFT_FOOT, -i + STAND_OFFSET_X, STAND_HEIGHT - STEP_CLEARANCE)
+        # Each foot sweeps from +L to -L inclusive over its own step length
+        i_right = RIGHT_STEP_LENGTH - 2 * RIGHT_STEP_LENGTH * k / SUBSTEPS
+        i_left = LEFT_STEP_LENGTH - 2 * LEFT_STEP_LENGTH * k / SUBSTEPS
+        set_foot_pos(RIGHT_FOOT, i_right + STAND_OFFSET_X, STAND_HEIGHT)
+        set_foot_pos(LEFT_FOOT, -i_left + STAND_OFFSET_X, STAND_HEIGHT - STEP_CLEARANCE)
         time.sleep(STEP_VELOCITY)
 
     # Phase 2: Swap
     for k in range(SUBSTEPS + 1):
-        i = STEP_LENGTH - 2 * STEP_LENGTH * k / SUBSTEPS
-        set_foot_pos(LEFT_FOOT, i + STAND_OFFSET_X, STAND_HEIGHT)
-        set_foot_pos(RIGHT_FOOT, -i + STAND_OFFSET_X, STAND_HEIGHT - STEP_CLEARANCE)
+        i_left = LEFT_STEP_LENGTH - 2 * LEFT_STEP_LENGTH * k / SUBSTEPS
+        i_right = RIGHT_STEP_LENGTH - 2 * RIGHT_STEP_LENGTH * k / SUBSTEPS
+        set_foot_pos(LEFT_FOOT, i_left + STAND_OFFSET_X, STAND_HEIGHT)
+        set_foot_pos(RIGHT_FOOT, -i_right + STAND_OFFSET_X, STAND_HEIGHT - STEP_CLEARANCE)
         time.sleep(STEP_VELOCITY)
 
 
