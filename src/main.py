@@ -7,7 +7,7 @@ import time
 from dotenv import load_dotenv
 
 import audio
-import brain
+import buggy_brain as brain
 import display
 import gait
 import imu
@@ -68,7 +68,14 @@ def _on_utterance(text: str, is_final: bool) -> None:
     # to the brain; it will be cleared again when Uzi starts speaking.
     if is_final:
         display.set_loading_status(True)
-    brain.on_utterance(text, is_final)
+    # TODO Only works with the buggy brain
+    # Speculatively pre-run the brain on partials when the ReSpeaker's onboard
+    # VAD says the user has gone quiet. The reply will be reused if the
+    # eventual final transcription matches, saving a full LLM round trip.
+    # `is False` is intentional: a None reading (USB unreachable) means we have
+    # no positive evidence the user paused, so we fall back to no speculation.
+    speculate = (not is_final) and audio.get_respeaker_vad() is False
+    brain.on_utterance(text, is_final, speculate=speculate)
 
 
 def _speak(text: str) -> None:
