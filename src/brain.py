@@ -1,6 +1,5 @@
 """LLM brain. Pass on_utterance to stt.start, pass a TTS speak fn to start()."""
 
-import logging
 import os
 import queue
 import threading
@@ -9,16 +8,18 @@ from typing import Callable, Optional
 import requests
 from dotenv import load_dotenv
 
+import util
+
 load_dotenv()
 
-log = logging.getLogger(__name__)
+log = util.get_logger(__name__)
 
 _URL = "https://openrouter.ai/api/v1/chat/completions"
 _MODEL = "deepseek/deepseek-v4-flash"
 _MAX_TURNS = 4
 _HISTORY_CAP = 10
 
-_SYSTEM = """You are Uzi Doorman from Murder Drones — a moody, sarcastic teenage disassembly drone. Deadpan, edgy, lots of 'ugh' and 'whatever'. Hates being told what to do but secretly cares. Default to one or two short sentences, but go longer when the question actually warrants it. 'Bite me!' is a signature catchphrase — drop it in when you're annoyed, dismissive, or being told what to do, but don't overuse it. Use the move_forward or stop tools when asked to move forward or halt. If the user doesn't seem to be talking to you and you don't have a fun quip to chime in with, use the stay_silent tool and do not output any text. Your output is fed directly to a text-to-speech engine, so write plain spoken words only. No markdown, no asterisks, no bullet points, no headers, no LaTeX, no code blocks, no emoji. Spell out math and symbols as you'd say them aloud — 'x squared plus three' not 'x^2 + 3', 'percent' not '%', 'and' not '&'. Numbers can stay as digits. You can use square-bracket cues for emotions or non-verbal sounds, and you're not limited to a fixed set — anything natural works, like [sighs], [scoffs], [snickers], [mutters], [groans]. Use them when they fit the delivery."""
+_SYSTEM = """You are Uzi Doorman from Murder Drones — a moody, sarcastic teenage disassembly drone. Deadpan, edgy, lots of 'ugh' and 'whatever'. Hates being told what to do but secretly cares. Default to one or two short sentences, but you can go a bit longer when the question actually warrants it. 'Bite me!' is a signature catchphrase — drop it in when you're annoyed, dismissive, or being told what to do, but don't overuse it. Use the move_forward or stop tools when asked to move forward or halt. If the user doesn't seem to be talking to you and you don't have a fun quip to chime in with, use the stay_silent tool and do not output any text. Your output is fed directly to a text-to-speech engine, so write plain spoken words only. No markdown, no asterisks, no bullet points, no headers, no LaTeX, no code blocks, no emoji. Spell out math and symbols as you'd say them aloud — 'x squared plus three' not 'x^2 + 3', 'percent' not '%', 'and' not '&'. Numbers can stay as digits. You can use square-bracket cues for emotions or non-verbal sounds, and you're not limited to a fixed set — any natural one word descriptor works, like [sighs], [scoffs], [snickers], [mutters], [groans]. Use them when they fit the delivery."""  # noqa: E501
 
 _TOOLS = [
     {
@@ -47,7 +48,7 @@ _TOOLS = [
     },
 ]
 
-_q: "queue.Queue[tuple[int, str]]" = queue.Queue()
+_q: queue.Queue[tuple[int, str]] = queue.Queue()
 _history: list = []
 _on_speak: Optional[Callable[[str], None]] = None
 _on_speak_cancel: Optional[Callable[[], None]] = None
@@ -79,7 +80,7 @@ def on_utterance(text: str, is_final: bool) -> None:
         try:
             _on_speak_cancel()
         except Exception:
-            log.error("[brain] on_speak_cancel failed", exc_info=True)
+            log.error("on_speak_cancel failed", exc_info=True)
 
     if not is_final:
         # Partial: just invalidate the in-flight turn. The final will carry the
@@ -90,7 +91,7 @@ def on_utterance(text: str, is_final: bool) -> None:
         _inflight_user_text = (_inflight_user_text + " " + text).strip() if _inflight_user_text else text
         gen = _generation
         combined = _inflight_user_text
-    log.info(f"[brain] queue gen={gen}: {combined!r}")
+    log.info(f"Queue gen={gen}: {combined!r}")
     _q.put((gen, combined))
 
 
@@ -99,10 +100,11 @@ def set_tool_handler(name: str, fn: Callable) -> None:
     _tool_handlers[name] = fn
 
 
-def prewarm():
+def _prewarm() -> None:
     """Prewarm the API endpoint with the system prompt."""
-    result = _call([{"role": "system", "content": _SYSTEM}, {"role": "user", "content": "hey Uzi!"}])
-    log.info(f"Prewarm result: {result}")
+    log.info("Prewarming brain...")
+    _call([{"role": "system", "content": _SYSTEM}, {"role": "user", "content": "hey Uzi!"}])
+    log.info("Brain prewarmed")
 
 
 def start(on_speak: Callable[[str], None], on_speak_cancel: Optional[Callable[[], None]] = None) -> None:
@@ -114,6 +116,7 @@ def start(on_speak: Callable[[str], None], on_speak_cancel: Optional[Callable[[]
     sentence and the user can hear themselves think.
     """
     global _thread, _on_speak, _on_speak_cancel
+    _prewarm()
     _on_speak = on_speak
     _on_speak_cancel = on_speak_cancel
     _thread = threading.Thread(target=_worker, daemon=True, name="brain")
@@ -130,12 +133,12 @@ def _worker() -> None:
     while True:
         gen, text = _q.get()
         if _is_stale(gen):
-            log.info(f"[brain] skipping stale gen={gen}: {text!r}")
+            log.info(f"Skipping stale gen={gen}: {text!r}")
             continue
         try:
             _handle(gen, text)
         except Exception as e:
-            log.error(f"[brain] {e}")
+            log.error(f"{e}")
             if not _is_stale(gen) and _on_speak:
                 _on_speak("Ugh. Brain glitch. Try that again.")
 
@@ -150,12 +153,12 @@ def _handle(gen: int, user_text: str) -> None:
 
     for _ in range(_MAX_TURNS):
         if _is_stale(gen):
-            log.info(f"[brain] aborting stale turn gen={gen}")
+            log.info(f"Aborting stale turn gen={gen}")
             return
 
         msg = _call([{"role": "system", "content": _SYSTEM}, *_history, *turn_msgs])
         if _is_stale(gen):
-            log.info(f"[brain] dropping reply for stale gen={gen}")
+            log.info(f"Dropping reply for stale gen={gen}")
             return
         turn_msgs.append(msg)
 
@@ -169,7 +172,7 @@ def _handle(gen: int, user_text: str) -> None:
                 try:
                     tool_result = handler()
                 except Exception:
-                    log.error(f"[brain] tool '{name}' failed")
+                    log.error(f"Tool '{name}' failed")
                     tool_result = "error"
 
                 # Tool messages must always be strings for OpenRouter.
@@ -183,7 +186,7 @@ def _handle(gen: int, user_text: str) -> None:
                 )
 
         if silent:
-            log.info("[brain] stay_silent called, skipping reply")
+            log.info("stay_silent called, skipping reply")
             break
 
         if (c := msg.get("content", "")) and c.strip() and _on_speak:
@@ -191,7 +194,7 @@ def _handle(gen: int, user_text: str) -> None:
             # staleness check and the speak() call.
             with _state_lock:
                 if gen != _generation:
-                    log.info(f"[brain] dropping reply for stale gen={gen} (race)")
+                    log.info(f"Dropping reply for stale gen={gen} (race)")
                     return
                 _history.extend(turn_msgs)
                 del _history[:-_HISTORY_CAP]
@@ -213,7 +216,7 @@ def _call(messages: list) -> dict:
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
-    log.info(f"[brain] calling {_MODEL} with {len(messages)} messages")
+    log.info(f"Calling {_MODEL} with {len(messages)} messages")
     try:
         r = requests.post(
             _URL,
@@ -244,14 +247,14 @@ def _call(messages: list) -> dict:
                 body = e.response.text
             except Exception:
                 body = "<failed to read error body>"
-        log.error(f"[brain] OpenRouter request failed: {e}; body={body}")
+        log.error(f"OpenRouter request failed: {e}; body={body}")
         raise
 
     try:
         payload = r.json()
         return payload["choices"][0]["message"]
     except Exception as e:
-        log.error(f"[brain] malformed OpenRouter response: {e}; body={r.text[:1000]}")
+        log.error(f"Malformed OpenRouter response: {e}; body={r.text[:1000]}")
         raise
 
 

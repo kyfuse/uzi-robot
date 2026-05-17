@@ -1,12 +1,11 @@
 """Controls the LED."""
 
-import logging
-
 import digitalio
 
+import util
 from pins import LED
 
-log = logging.getLogger(__name__)
+log = util.get_logger(__name__)
 
 _led = digitalio.DigitalInOut(LED)
 _led.direction = digitalio.Direction.OUTPUT

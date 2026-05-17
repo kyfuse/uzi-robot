@@ -2,8 +2,7 @@ from adafruit_servokit import ServoKit
 
 kit = ServoKit(channels=16)
 for servo_num in range(4, 12):
-    # kit.servo[servo_num].set_pulse_width_range(600, 2400)
-    kit.servo[servo_num].set_pulse_width_range(650, 2350)
+    kit.servo[servo_num].set_pulse_width_range(600, 2400)
 
 while True:
     servo_num = int(input("Enter a servo number (4-11): "))

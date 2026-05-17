@@ -1,10 +1,8 @@
 """Main entry point for Uzi."""
 
-import logging
 import threading
 import time
 
-import colorlog
 from dotenv import load_dotenv
 
 import audio
@@ -16,33 +14,12 @@ import led
 import servos
 import stt
 import tts
+import util
 
 load_dotenv()
 
 
-def setup_logging():
-    """Sets up color logging."""
-    handler = colorlog.StreamHandler()
-    handler.setFormatter(
-        colorlog.ColoredFormatter(
-            "%(thin_white)s%(asctime)s%(reset)s %(log_color)s %(levelname)-8s%(reset)s %(blue)s%(name)s%(reset)s  %(message)s",
-            log_colors={
-                "DEBUG": "cyan",
-                "INFO": "green",
-                "WARNING": "yellow",
-                "ERROR": "red",
-                "CRITICAL": "red,bg_white",
-            },
-        )
-    )
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-
-
-setup_logging()
-
-log = logging.getLogger("uzi")
+log = util.get_logger("uzi")
 should_walk = threading.Event()
 
 
@@ -50,9 +27,11 @@ def walk_test():
     try:
         servos.reset_all()
         input("Press Enter to continue...")
-        # gait.initialize()
-        # for _ in range(4):
-        #     gait.take_step(step_length=1.0, step_velocity=0.5)
+        gait.initialize()
+        input("Press Enter to continue...")
+        for _ in range(1):
+            gait.take_step()
+        input("Press Enter to continue...")
 
         servos.set_angle(servos.RIGHT_HIP, -30)
         servos.set_angle(servos.RIGHT_KNEE, -30)
@@ -143,38 +122,66 @@ def main():
     # return
 
     # Start modules
-    audio.setup()
+    audio.start()
+    display.start()
+    imu.start()
     stt.start(on_utterance=brain.on_utterance)
+    tts.start(on_amplitude=display.draw_face)
     brain.set_tool_handler("move_forward", robot_move_forward)
     brain.set_tool_handler("stop", robot_stop)
     brain.set_tool_handler("stay_silent", lambda: "ok")
-    tts.start(on_amplitude=display.draw_face)
-    brain.prewarm()
     brain.start(on_speak=tts.speak, on_speak_cancel=tts.interrupt)
 
+    # Reset servos and display
     servos.reset_all()
+    servos.start_dither()
     display.clear()
-
-    threading.Thread(target=_walk_loop, daemon=True, name="walk").start()
-
-    # Draw an image with RGB rectangles.
     time.sleep(1)
     display.draw_uzi()
 
-    led.set(True)
+    threading.Thread(target=_walk_loop, daemon=True, name="walk").start()
 
-    # imu._run_imu_thread()
     # for i in range(100):
-    #     if stt.is_voice() is not None:
-    #         log.info(f"Voice detected: {stt.is_voice()}")
-    #     if stt.direction() is not None:
-    #         log.info(f"Direction: {stt.direction()}")
+    #     if audio.get_respeaker_vad() is not None:
+    #         log.info(f"Voice detected: {audio.get_respeaker_vad()}")
+    #     if audio.get_respeaker_doa() is not None:
+    #         log.info(f"Direction: {audio.get_respeaker_doa()}")
+    #     log.info(f"Heading: {imu.get_heading()}")
+    #     log.info(f"Acceleration: {imu.get_acceleration()}")
     #     time.sleep(0.1)
 
+    led.set(True)
     try:
-        threading.Event().wait()  # block forever; Ctrl+C to exit
+        threading.Event().wait()  # Block forever; Ctrl+C to exit
     except KeyboardInterrupt:
-        pass
+        log.info("Ctrl+C received, shutting down...")
+    finally:
+        _shutdown()
+
+
+def _shutdown() -> None:
+    """Stop background threads and release hardware before atexit cleanup runs.
+
+    Order matters: stop the input/output stages first, then the hardware
+    pollers, and finally the SPI display. Jetson.GPIO's atexit handler will
+    deconfigure all pins after main() returns, so anything still touching
+    SPI/GPIO/USB at that point will crash and can leave the ReSpeaker DSP
+    wedged until the next power cycle.
+    """
+    log.info("Stopping background threads...")
+    for name, fn in [
+        ("stt", stt.stop),
+        ("tts", tts.stop),
+        ("audio", audio.stop),
+        ("imu", imu.stop),
+        ("servo-dither", servos.stop_dither),
+        ("display", display.stop),
+    ]:
+        try:
+            fn()
+        except Exception:
+            log.error(f"Error while stopping {name}", exc_info=True)
+    log.info("Shutdown complete")
 
 
 if __name__ == "__main__":

@@ -2,10 +2,9 @@
 
 The audio output uses sounddevice's pull-based callback so that loudness can
 be measured at the moment samples actually leave for the speaker, keeping any
-mouth-animation callback (`on_amplitude`) tightly synced to what's heard.
+amplitude-animation callback (`on_amplitude`) tightly synced to what's heard.
 """
 
-import logging
 import os
 import queue
 import threading
@@ -17,18 +16,38 @@ import sounddevice as sd
 from fish_audio_sdk import TTSRequest, WebSocketSession
 
 import stt
+import util
 
-log = logging.getLogger(__name__)
+log = util.get_logger(__name__)
+
+_UZI_VOICE_ID = "dbfcbb173fb84528ac4ccaf446026277"
+_SAMPLE_RATE = 44100  # Fish PCM default
+_TAIL_SECONDS = 0.2  # Extra grace after buffer drains before re-arming STT
+_AMP_NORMALIZATION = 6000.0  # ~Typical speech RMS for int16; tune to taste
+_AMP_SMOOTHING = 0.3  # 0 = no smoothing, closer to 1 = more sluggish
+_amplitude_FPS = 60
+
+_q: "queue.Queue[str]" = queue.Queue()
+_stop = threading.Event()
+_interrupt = threading.Event()
+_thread: threading.Thread | None = None
+_amplitude_thread: threading.Thread | None = None
+_stream_out: sd.OutputStream | None = None
+_on_amplitude: Optional[Callable[[float], None]] = None
+
+_pcm_buf = bytearray()
+_pcm_lock = threading.Lock()
+_latest_amp: float = 0.0  # Written by audio callback, read by amplitude thread
 
 
 def start(on_amplitude: Optional[Callable[[float], None]] = None) -> None:
     """Start the TTS thread and open the audio output stream.
 
-    on_amplitude(level) is dispatched at ~30 Hz from a dedicated thread with
+    on_amplitude(level) is dispatched at ~60 Hz from a dedicated thread with
     a smoothed [0, 1] loudness value of audio currently leaving the speaker.
     Drops to ~0 between utterances. Useful for driving a mouth animation.
     """
-    global _thread, _mouth_thread, _stream_out, _on_amplitude
+    global _thread, _amplitude_thread, _stream_out, _on_amplitude
     _on_amplitude = on_amplitude
     _stop.clear()
     _stream_out = sd.OutputStream(
@@ -42,8 +61,8 @@ def start(on_amplitude: Optional[Callable[[float], None]] = None) -> None:
     _stream_out.start()
     _thread = threading.Thread(target=_worker, daemon=True, name="tts")
     _thread.start()
-    _mouth_thread = threading.Thread(target=_mouth_worker, daemon=True, name="tts-mouth")
-    _mouth_thread.start()
+    _amplitude_thread = threading.Thread(target=_amplitude_worker, daemon=True, name="tts-amplitude")
+    _amplitude_thread.start()
 
 
 def stop() -> None:
@@ -60,8 +79,8 @@ def stop() -> None:
             _stream_out = None
     if _thread:
         _thread.join(timeout=2.0)
-    if _mouth_thread:
-        _mouth_thread.join(timeout=2.0)
+    if _amplitude_thread:
+        _amplitude_thread.join(timeout=2.0)
 
 
 def speak(text: str) -> None:
@@ -88,26 +107,6 @@ def interrupt() -> None:
         _pcm_buf.clear()
 
 
-_UZI_VOICE_ID = "dbfcbb173fb84528ac4ccaf446026277"
-_SAMPLE_RATE = 44100  # Fish PCM default
-_TAIL_SECONDS = 0.2  # extra grace after buffer drains, before re-arming STT
-_AMP_NORMALIZATION = 6000.0  # ~typical speech RMS for int16; tune to taste
-_AMP_SMOOTHING = 0.3  # 0 = no smoothing, closer to 1 = more sluggish
-_MOUTH_FPS = 60
-
-_q: "queue.Queue[str]" = queue.Queue()
-_stop = threading.Event()
-_interrupt = threading.Event()
-_thread: threading.Thread | None = None
-_mouth_thread: threading.Thread | None = None
-_stream_out: sd.OutputStream | None = None
-_on_amplitude: Optional[Callable[[float], None]] = None
-
-_pcm_buf = bytearray()
-_pcm_lock = threading.Lock()
-_latest_amp: float = 0.0  # written by audio callback, read by mouth thread
-
-
 def _audio_cb(outdata, frames: int, time_info, status) -> None:
     """Real-time audio callback. Pulls PCM from `_pcm_buf` and measures loudness."""
     global _latest_amp
@@ -132,9 +131,9 @@ def _audio_cb(outdata, frames: int, time_info, status) -> None:
         _latest_amp = 0.0
 
 
-def _mouth_worker() -> None:
+def _amplitude_worker() -> None:
     """Reads `_latest_amp` and dispatches `on_amplitude` outside the audio thread."""
-    period = 1.0 / _MOUTH_FPS
+    period = 1.0 / _amplitude_FPS
     smoothed = 0.0
     last_emitted = -1.0
     while not _stop.is_set():
@@ -223,10 +222,8 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
 
     load_dotenv()
-    logging.basicConfig(level=logging.INFO)
 
-    start(on_amplitude=lambda a: None)
-    # start(on_amplitude=lambda a: print(f"amp={a:.2f}"))
+    start(on_amplitude=lambda a: print(f"amp={a:.2f}"))
     speak("Hey! I'm Uzi.")
     speak("[snarky] Bite me.")
     speak("What do you mean we're out of acid?!")

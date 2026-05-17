@@ -2,6 +2,21 @@
 
 ![Uzi](img/uzi.png)
 
+def _ik(x: float, z: float) -> tuple[float, float, float]:
+    """
+    Given a desired foot position in a 2D frame, computes the (hip, knee, ankle) joint angles to achieve it, such that
+    the hip angle is positive (hip goes forward). Joint angles are traced from the top down, with CCW angles as
+    positive. The straight, standing pose is (0, 0, 0).
+
+    x and z are the forward and downward foot offsets from the hip joint, respectively.
+    """
+    d = math.sqrt(x**2 + z**2)
+    theta_1 = math.acos((L2**2 + d**2 - L1**2) / (2 * L2 * d))
+    theta_2 = math.acos((L1**2 + d**2 - L2**2) / (2 * L1 * d))
+    theta_d = 2 * math.pi - theta_1 - theta_2
+    theta_x = math.atan2(x, z)
+    theta_hip = theta_2 + 
+
 Uzi from Murder Drones, but in real life (with less murdering).
 
 Modules:

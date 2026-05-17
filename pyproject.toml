@@ -23,4 +23,6 @@ dependencies = [
     "sherpa-onnx-bin>=1.13.0",
     "sounddevice>=0.5.5",
     "requests>=2.33.1",
+    "matplotlib>=3.10.9",
+    "tornado>=6.5.5",
 ]
