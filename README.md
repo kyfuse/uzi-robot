@@ -161,11 +161,6 @@ cd ../../..
 # Get STT model
 ARCHIVE=sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06.tar.bz2 && mkdir -p models && wget -q -O "models/$ARCHIVE" "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$ARCHIVE" && tar xjf "models/$ARCHIVE" -C models && rm "models/$ARCHIVE"
 
-# Setup systemd service
-sudo cp uzi-robot.service /etc/systemd/system/uzi-robot.service
-sudo systemctl daemon-reload  # Reloads the config .service file
-# sudo systemctl [enable/disable] --now uzi-robot.service: Changes the service to run/stop now/on startup.
-
 echo "Setup complete! Note: Need to manually configure pins in jetson-io. See README.md."
 ```
 
@@ -194,7 +189,7 @@ FISH_API_KEY=<Your API key>
 
 The setup script installs a systemd service that runs while the Jetson is on, auto-starting Uzi.
 
-Disable/enable auto-start:
+Disable/enable auto-start (WARNING: If you're resting Uzi on her Jetson mount support and have the servos connected, Uzi *will* tip over when she starts up / tries to stand. Keep the servos unpowered, and manually help Uzi stand once she boots.)
 ```sh
 sudo systemctl [enable/disable] --now uzi-robot.service
 ```
