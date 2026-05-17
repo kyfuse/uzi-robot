@@ -1,14 +1,16 @@
 [Unit]
 Description=Uzi Robot
-After=network-online.target
+After=network-online.target sound.target
 
 [Service]
 Type=simple
-User=uzi
-ExecStart=/home/uzi/src/uzi-robot/test.sh
 WorkingDirectory=/home/uzi/src/uzi-robot
+ExecStart=/home/uzi/.local/bin/uv run src/main.py
+KillSignal=SIGTERM
+TimeoutStopSec=20
 Restart=on-failure
 RestartSec=5
+SuccessExitStatus=143
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

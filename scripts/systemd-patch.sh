@@ -14,10 +14,17 @@ case "$1" in
 	*) usage ;;
 esac
 
-echo "🔧 Patching systemd service..."
-sudo cp "${SCRIPT_DIR}/../uzi-robot.service" /etc/systemd/system/uzi-robot.service
-sudo systemctl daemon-reload
-sudo systemctl "$1" --now uzi-robot.service
-sudo systemctl status uzi-robot.service
+echo "🔧 Patching systemd user service..."
+mkdir -p "${HOME}/.config/systemd/user"
+cp "${SCRIPT_DIR}/../uzi-robot.service" "${HOME}/.config/systemd/user/uzi-robot.service"
+systemctl --user daemon-reload
+
+if [[ "$1" == "enable" ]]; then
+	# Allow the user service manager to run at boot without a login session.
+	sudo loginctl enable-linger "$USER"
+fi
+
+systemctl --user "$1" --now uzi-robot.service
+systemctl --user status uzi-robot.service --no-pager
 
 echo "✅ Service patched!"

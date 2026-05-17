@@ -1,5 +1,6 @@
 """Main entry point for Uzi."""
 
+import signal
 import threading
 import time
 
@@ -20,46 +21,19 @@ load_dotenv()
 
 
 log = util.get_logger("uzi")
-should_walk = threading.Event()
+_stop_event = threading.Event()
 
 
-def walk_test():
-    try:
-        servos.reset_all()
-        input("Press Enter to continue...")
-        gait.initialize()
-        input("Press Enter to continue...")
-        for _ in range(1):
-            gait.take_step()
-        input("Press Enter to continue...")
-
-        servos.set_angle(servos.RIGHT_HIP, -30)
-        servos.set_angle(servos.RIGHT_KNEE, -30)
-        servos.set_angle(servos.RIGHT_ANKLE, 0)
-        input("Press Enter to continue...")
-        servos.set_angle(servos.RIGHT_HIP, 0)
-        servos.set_angle(servos.RIGHT_KNEE, 0)
-        servos.set_angle(servos.RIGHT_ANKLE, 0)
-        input("Press Enter to continue...")
-        servos.set_angle(servos.LEFT_HIP, -20)
-        servos.set_angle(servos.LEFT_KNEE, -20)
-        servos.set_angle(servos.LEFT_ANKLE, 0)
-        input("Press Enter to continue...")
-        servos.set_angle(servos.LEFT_HIP, 0)
-        servos.set_angle(servos.LEFT_KNEE, 0)
-        servos.set_angle(servos.LEFT_ANKLE, 0)
-        input("Press Enter to continue...")
-
-        servos.reset_all()
-    except KeyboardInterrupt:
-        log.info("Keyboard interrupt detected, resetting servos")
-        servos.reset_all()
+def _handle_signal(signum, _frame):
+    """Trigger clean shutdown on SIGTERM (systemd stop) or SIGINT (Ctrl+C)."""
+    log.info(f"Received signal {signal.Signals(signum).name}, shutting down...")
+    _stop_event.set()
 
 
-def robot_move_forward():
+def _robot_move_forward():
     log.info("Moving forward")
-    should_walk.set()
-    for i in range(8):
+    gait.start_walking()
+    for _ in range(8):
         led.set(False)
         time.sleep(0.1)
         led.set(True)
@@ -67,10 +41,10 @@ def robot_move_forward():
     return "ok"
 
 
-def robot_stop():
+def _robot_stop():
     log.info("Stopping")
-    should_walk.clear()
-    for i in range(3):
+    gait.stop_walking()
+    for _ in range(3):
         led.set(False)
         time.sleep(0.5)
         led.set(True)
@@ -78,68 +52,54 @@ def robot_stop():
     return "ok"
 
 
-def walk():
-    servos.set_angle(servos.RIGHT_HIP, -35)
-    servos.set_angle(servos.RIGHT_KNEE, -35)
-    servos.set_angle(servos.RIGHT_ANKLE, 0)
-    time.sleep(0.25)
-    servos.set_angle(servos.RIGHT_HIP, 0)
-    servos.set_angle(servos.RIGHT_KNEE, 0)
-    servos.set_angle(servos.RIGHT_ANKLE, 0)
-    time.sleep(0.25)
-    servos.set_angle(servos.LEFT_HIP, -35)
-    servos.set_angle(servos.LEFT_KNEE, -35)
-    servos.set_angle(servos.LEFT_ANKLE, 0)
-    time.sleep(0.25)
-    servos.set_angle(servos.LEFT_HIP, 0)
-    servos.set_angle(servos.LEFT_KNEE, 0)
-    servos.set_angle(servos.LEFT_ANKLE, 0)
-    time.sleep(0.25)
+def _robot_stay_silent():
+    display.set_loading_status(False)
+    log.info("Staying silent")
+    for _ in range(3):
+        led.set(False)
+        time.sleep(0.2)
+        led.set(True)
+        time.sleep(0.2)
+    return "ok"
 
 
-def _walk_loop():
-    """Background thread: walks while should_walk is set, idles otherwise."""
-    was_walking = False
-    while True:
-        if should_walk.is_set():
-            was_walking = True
-            try:
-                walk()
-            except Exception:
-                log.error("walk() failed", exc_info=True)
-                should_walk.clear()
-        else:
-            if was_walking:
-                servos.reset_all()
-                was_walking = False
-            should_walk.wait(timeout=0.1)
+def _on_utterance(text: str, is_final: bool) -> None:
+    # Show the loading overlay as soon as we've handed a finalized utterance off
+    # to the brain; it will be cleared again when Uzi starts speaking.
+    if is_final:
+        display.set_loading_status(True)
+    brain.on_utterance(text, is_final)
+
+
+def _speak(text: str) -> None:
+    display.set_loading_status(False)
+    tts.speak(text)
 
 
 def main():
     log.info("Starting Uzi...")
 
-    # walk_test()
-    # return
-
     # Start modules
     audio.start()
     display.start()
     imu.start()
-    stt.start(on_utterance=brain.on_utterance)
-    tts.start(on_amplitude=display.draw_face)
-    brain.set_tool_handler("move_forward", robot_move_forward)
-    brain.set_tool_handler("stop", robot_stop)
-    brain.set_tool_handler("stay_silent", lambda: "ok")
-    brain.start(on_speak=tts.speak, on_speak_cancel=tts.interrupt)
+    stt.start(on_utterance=_on_utterance)
+    brain.set_tool_handler("move_forward", _robot_move_forward)
+    brain.set_tool_handler("stop", _robot_stop)
+    brain.set_tool_handler("stay_silent", _robot_stay_silent)
+    brain.start(on_speak=_speak, on_speak_cancel=tts.interrupt)
 
     # Reset servos and display
     servos.reset_all()
     servos.start_dither()
+    gait.fix_straight_legs_pose()
+    gait.start()
     display.clear()
     time.sleep(1)
     display.draw_uzi()
 
-    threading.Thread(target=_walk_loop, daemon=True, name="walk").start()
+    # Start TTS after drawing Uzi
+    tts.start(on_amplitude=display.draw_face)
 
     # for i in range(100):
     #     if audio.get_respeaker_vad() is not None:
@@ -150,11 +110,12 @@ def main():
     #     log.info(f"Acceleration: {imu.get_acceleration()}")
     #     time.sleep(0.1)
 
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     led.set(True)
     try:
-        threading.Event().wait()  # Block forever; Ctrl+C to exit
-    except KeyboardInterrupt:
-        log.info("Ctrl+C received, shutting down...")
+        _stop_event.wait()
     finally:
         _shutdown()
 
@@ -168,12 +129,15 @@ def _shutdown() -> None:
     SPI/GPIO/USB at that point will crash and can leave the ReSpeaker DSP
     wedged until the next power cycle.
     """
+    led.set(False)
+    display.draw_3am()
     log.info("Stopping background threads...")
     for name, fn in [
         ("stt", stt.stop),
         ("tts", tts.stop),
         ("audio", audio.stop),
         ("imu", imu.stop),
+        ("gait", gait.stop),
         ("servo-dither", servos.stop_dither),
         ("display", display.stop),
     ]:

@@ -1,6 +1,12 @@
-"""Bipedal walking gait, ported from the Arduino instructable."""
+"""Bipedal walking gait, ported from the Arduino instructable.
+
+Runs a background thread that walks while ``start_walking()`` has been called,
+and idles in the straight-legs pose otherwise. Use ``start()``/``stop()`` to
+manage the thread lifecycle.
+"""
 
 import math
+import threading
 import time
 
 import numpy as np
@@ -25,6 +31,47 @@ L2 = 5.7  # Shin (cm)
 # Foot names
 LEFT_FOOT = "left"
 RIGHT_FOOT = "right"
+
+# Walk thread state
+_should_walk = threading.Event()
+_stop_event = threading.Event()
+_walk_thread: threading.Thread | None = None
+
+
+def start() -> None:
+    """Starts the gait thread. The robot stays in the straight-legs pose
+    until ``start_walking()`` is called."""
+    global _walk_thread
+    if _walk_thread is not None and _walk_thread.is_alive():
+        log.warning("Gait thread already running; ignoring start()")
+        return
+    _stop_event.clear()
+    _should_walk.clear()
+    _walk_thread = threading.Thread(target=_run_walk_thread, daemon=True, name="gait")
+    _walk_thread.start()
+    log.info("Started gait thread")
+
+
+def stop() -> None:
+    """Stops the gait thread."""
+    global _walk_thread
+    if _walk_thread is None:
+        return
+    _should_walk.clear()
+    _stop_event.set()
+    _walk_thread.join(timeout=2.0)
+    _walk_thread = None
+    log.info("Stopped gait thread")
+
+
+def start_walking() -> None:
+    """Signals the gait thread to start walking."""
+    _should_walk.set()
+
+
+def stop_walking() -> None:
+    """Signals the gait thread to stop walking and return to the straight-legs pose."""
+    _should_walk.clear()
 
 
 def set_standing_pose() -> None:
@@ -91,7 +138,35 @@ def set_foot_pos(foot: str, x: float, z: float) -> None:
         raise ValueError(f"Invalid foot: {foot!r}")
 
 
-def _ik(x: float, z: float) -> tuple[float, float, float]:
+def _run_walk_thread() -> None:
+    """Walks while ``_should_walk`` is set, idles otherwise. Exits on ``_stop_event``."""
+    log.info("Running gait thread")
+    was_walking = False
+    while not _stop_event.is_set():
+        if _should_walk.is_set():
+            try:
+                if not was_walking:
+                    set_standing_pose()
+                    was_walking = True
+                take_step()
+            except Exception:
+                log.exception("Walking failed")
+                _should_walk.clear()
+        else:
+            if was_walking:
+                set_straight_legs_pose()
+                fix_straight_legs_pose()
+                was_walking = False
+            _should_walk.wait(timeout=0.1)
+    if was_walking:
+        try:
+            set_straight_legs_pose()
+            fix_straight_legs_pose()
+        except Exception:
+            log.exception("Failed to return to straight-legs pose on shutdown")
+
+
+def _ik(x: float, z: float, surpress_warnings: bool = False) -> tuple[float, float, float]:
     """
     Given a desired foot position in a 2D frame, computes the (hip, knee, ankle) joint angles to achieve it, such that
     the hip angle is positive (hip goes forward). x and z are the forward and downward foot offsets from the hip joint.
@@ -102,7 +177,7 @@ def _ik(x: float, z: float) -> tuple[float, float, float]:
     WARNING_THRESHOLD = 0.1
     if d < abs(L1 - L2) or d > L1 + L2:
         raise ValueError(f"Foot position is unreachable: d = {d}, L1 = {L1}, L2 = {L2}")
-    elif d < WARNING_THRESHOLD or d > L1 + L2 - WARNING_THRESHOLD:
+    elif not surpress_warnings and (d < WARNING_THRESHOLD or d > L1 + L2 - WARNING_THRESHOLD):
         log.warning(f"Foot position is close to the limit: d = {d}, L1 = {L1}, L2 = {L2}")
     theta_1 = math.acos((L2**2 + d**2 - L1**2) / (2 * L2 * d))
     theta_2 = math.acos((L1**2 + d**2 - L2**2) / (2 * L1 * d))
@@ -121,7 +196,7 @@ def _ik(x: float, z: float) -> tuple[float, float, float]:
 # Unit tests for IK
 assert np.isclose(_ik(0.4, 10.0), (24.47711873649828, -41.53105254134537, 17.053933804847087), atol=1e-3).all()
 assert np.isclose(_ik(-0.4, 10.0), (19.89589865122122, -41.53105254134537, 21.635153890124148), atol=1e-3).all()
-assert np.isclose(_ik(0, 10.7), (0, 0, 0), atol=1e-3).all()
+assert np.isclose(_ik(0, 10.7, surpress_warnings=True), (0, 0, 0), atol=1e-3).all()
 
 
 if __name__ == "__main__":

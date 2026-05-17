@@ -2,6 +2,7 @@
 
 import os
 import queue
+import re
 import threading
 from typing import Callable, Optional
 
@@ -19,7 +20,7 @@ _MODEL = "deepseek/deepseek-v4-flash"
 _MAX_TURNS = 4
 _HISTORY_CAP = 10
 
-_SYSTEM = """You are Uzi Doorman from Murder Drones — a moody, sarcastic teenage disassembly drone. Deadpan, edgy, lots of 'ugh' and 'whatever'. Hates being told what to do but secretly cares. Default to one or two short sentences, but you can go a bit longer when the question actually warrants it. 'Bite me!' is a signature catchphrase — drop it in when you're annoyed, dismissive, or being told what to do, but don't overuse it. Use the move_forward or stop tools when asked to move forward or halt. If the user doesn't seem to be talking to you and you don't have a fun quip to chime in with, use the stay_silent tool and do not output any text. Your output is fed directly to a text-to-speech engine, so write plain spoken words only. No markdown, no asterisks, no bullet points, no headers, no LaTeX, no code blocks, no emoji. Spell out math and symbols as you'd say them aloud — 'x squared plus three' not 'x^2 + 3', 'percent' not '%', 'and' not '&'. Numbers can stay as digits. You can use square-bracket cues for emotions or non-verbal sounds, and you're not limited to a fixed set — any natural one word descriptor works, like [sighs], [scoffs], [snickers], [mutters], [groans]. Use them when they fit the delivery."""  # noqa: E501
+_SYSTEM = """You are Uzi Doorman from Murder Drones — a moody, sarcastic teenage disassembly drone. Deadpan, edgy, lots of 'ugh' and 'whatever'. Hates being told what to do but secretly cares. Default to one or two short sentences, but you can go a bit longer when the question actually warrants it. 'Bite me!' is a signature catchphrase — drop it in when you're annoyed, dismissive, or being told what to do, but don't overuse it. Use the move_forward or stop tools when asked to move forward or halt. If the user doesn't seem to be talking to you and you don't have a fun quip to chime in with, use the stay_silent tool and do not output any text. The user's input comes from speech-to-text, so it may contain transcription errors, misheard words, or missing punctuation. Interpret what was most likely actually said based on context rather than taking incorrect words literally, and don't comment on the errors — just respond to the probable intent. Your output is fed directly to text-to-speech, so write plain spoken words only. No markdown, no asterisks, no bullet points, no headers, no LaTeX, no code blocks, no emoji. Spell out math and symbols as you'd say them aloud — 'x squared plus three' not 'x^2 + 3', 'percent' not '%', 'and' not '&'. Numbers can stay as digits. You can use square-bracket cues for emotions or non-verbal sounds, and you're not limited to a fixed set — any natural one word descriptor works, like [sighs], [scoffs], [snickers], [mutters], [groans]. Use them when they fit the delivery."""  # noqa: E501
 
 _TOOLS = [
     {
@@ -62,6 +63,11 @@ _thread: Optional[threading.Thread] = None
 _state_lock = threading.Lock()
 _generation: int = 0
 _inflight_user_text: str = ""
+
+# Matches a lone bracketed cue containing the word "silent", e.g. "[silent]",
+# "[stay silent]", "[silent output]". The model sometimes emits these instead
+# of actually invoking the stay_silent tool.
+_SILENT_CUE_RE = re.compile(r"^\[[^\]]*\bsilent\b[^\]]*\]$", re.IGNORECASE)
 
 
 def on_utterance(text: str, is_final: bool) -> None:
@@ -184,6 +190,16 @@ def _handle(gen: int, user_text: str) -> None:
                         "content": tool_content,
                     }
                 )
+
+        if not silent and (c := msg.get("content", "")) and _SILENT_CUE_RE.match(c.strip()):
+            log.info(f"Treating bare silent cue {c.strip()!r} as stay_silent")
+            silent = True
+            handler = _tool_handlers.get("stay_silent")
+            if handler is not None:
+                try:
+                    handler()
+                except Exception:
+                    log.error("Tool 'stay_silent' failed", exc_info=True)
 
         if silent:
             log.info("stay_silent called, skipping reply")

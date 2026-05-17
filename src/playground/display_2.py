@@ -53,7 +53,7 @@ else:
     width = disp.width  # we swap height/width to rotate it to landscape!
     height = disp.height
 
-image = Image.open("img/uzi.png")
+image = Image.open("img/image.jpg")
 
 # Scale the image to the smaller screen dimension
 image_ratio = image.width / image.height
@@ -71,15 +71,7 @@ image = image.resize((scaled_width, scaled_height), Image.BICUBIC)
 x = scaled_width // 2 - width // 2
 y = scaled_height // 2 - height // 2
 image = image.crop((x, y, x + width, y + height))
-image.save("img/face_small.png")
+image.save("img/output.png")
 
 # Display image.
 disp.image(image)
-time.sleep(2)
-
-# Display a face
-face = image.crop((151, 213, 188, 232))
-draw = ImageDraw.Draw(face)
-draw.ellipse((0, 0, face.width, face.height), fill=(0, 0, 0))
-disp.image(face, x=151, y=213)
-time.sleep(2)
