@@ -1,4 +1,13 @@
-"""LLM brain. Pass on_utterance to stt.start, pass a TTS speak fn to start()."""
+"""
+LLM brain. Pass on_utterance to stt.start, pass a TTS speak fn to start().
+
+Note: The buggy version of this has speculative LLM execution, implemented
+in a not-so-clean way by Claude Opus 4.7. It decreases end-to-end latency by
+a substantial amount, but I didn't fully review the implementation as I'm sure
+there is a cleaner way to implement it. However, the current code appears to
+work in the average case, and it only runs into bugs semi-rarely. The non-buggy
+version is more thoroughly tested.
+"""
 
 import os
 import queue
