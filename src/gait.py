@@ -19,13 +19,13 @@ log = util.get_logger(__name__)
 # Configure these until the robot walks straight
 # STEP_LENGTH = 0.75
 LEFT_STEP_LENGTH = 0.5  # Left foot travel from either side of center (cm)
-RIGHT_STEP_LENGTH = 1.5  # Right foot travel from either side of center (cm)
+RIGHT_STEP_LENGTH = 1.25  # Right foot travel from either side of center (cm)
 
 # Gait parameters
-STAND_OFFSET_X = -0.75  # Foot position offset from center (cm)
+STAND_OFFSET_X = -1.25  # Foot position offset from center (cm)
 STAND_HEIGHT = 10.2  # Hip-to-foot distance while standing (cm)
 STEP_CLEARANCE = 0.5  # Highest distance that the swing foot lifts (cm)
-STEP_VELOCITY = 0.04  # Time between IK substeps (s)
+STEP_VELOCITY = 0.03  # Time between IK substeps (s)
 SUBSTEPS = 8  # IK samples per swing phase; one cycle has 2*substeps frames
 
 # Leg geometry
@@ -90,8 +90,10 @@ def set_straight_legs_pose() -> None:
 
 def fix_straight_legs_pose() -> None:
     """Fix the straight legs pose."""
-    servos.set_angle(servos.LEFT_HIP, 5)
-    servos.set_angle(servos.RIGHT_HIP, 5)
+    servos.set_angle(servos.LEFT_HIP, 4)
+    servos.set_angle(servos.LEFT_KNEE, 1)
+    servos.set_angle(servos.RIGHT_HIP, 4)
+    servos.set_angle(servos.RIGHT_KNEE, 1)
 
 
 def change_symmetric_pose(xi: float, zi: float, xf: float, zf: float) -> None:
@@ -161,14 +163,15 @@ def _run_walk_thread() -> None:
                 _should_walk.clear()
         else:
             if was_walking:
-                set_straight_legs_pose()
-                fix_straight_legs_pose()
+                # set_straight_legs_pose()
+                # fix_straight_legs_pose()
                 was_walking = False
             _should_walk.wait(timeout=0.1)
     if was_walking:
         try:
-            set_straight_legs_pose()
-            fix_straight_legs_pose()
+            change_symmetric_pose(STAND_OFFSET_X, STAND_HEIGHT, STAND_OFFSET_X, STAND_HEIGHT)
+            # set_straight_legs_pose()
+            # fix_straight_legs_pose()
         except Exception:
             log.exception("Failed to return to straight-legs pose on shutdown")
 
@@ -220,7 +223,7 @@ if __name__ == "__main__":
     # (19.89589865122122, -41.53105254134537, 21.635153890124148)
     print("IK test 1:", _ik(0.4, 10.0))
     print("IK test 2:", _ik(-0.4, 10.0))
-    print("IK test 3:", _ik(0, 10.7))
+    print("IK test 3:", _ik(0, 10.7, surpress_warnings=True))
 
     servos.start_dither()
     servos.reset_all()
@@ -228,14 +231,11 @@ if __name__ == "__main__":
     input("Press Enter to continue...")
     set_standing_pose()
     input("Press Enter to continue...")
-    take_step()
-    input("Press Enter to continue...")
-    for _ in range(4):
+    # take_step()
+    # input("Press Enter to continue...")
+    for _ in range(10):
         take_step()
     input("Press Enter to continue...")
-    set_straight_legs_pose()
-    fix_straight_legs_pose()
+    change_symmetric_pose(STAND_OFFSET_X, STAND_HEIGHT, STAND_OFFSET_X, STAND_HEIGHT)
     input("Press Enter to continue...")
-    servos.reset_all()
-    fix_straight_legs_pose()
     servos.stop_dither()
