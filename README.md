@@ -1,22 +1,26 @@
 # Uzi
 
-![Uzi](img/uzi.png)
+![Built Uzi](img/readme/built-uzi.png)
+
+[Video Demo](https://youtu.be/IucnzrWSngo)
 
 Uzi from Murder Drones, but in real life (with less murdering).
 
+![Pipeline](img/readme/pipeline.png)
+
 Modules:
 
-- Speech to text: sherpa-onnx with the sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06 model on CPU
-- Agent: OpenRouter with DeepSeek v4 Flash, Uzi prompt/tools
-- Walking: Hard-coded (WIP)
-- Text to speech: Fish Audio S2-Pro using [Uzi Doorman (murder drones)](https://fish.audio/m/dbfcbb173fb84528ac4ccaf446026277/)
-- Display: Very basic lip-syncing
+- Speech to text (STT): sherpa-onnx with the sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06 model on CPU
+- OpenRouter -> LLM: OpenRouter with DeepSeek v4 Flash; move_forward, stop, stay_silent tools
+- Text to speech (TTS): Fish Audio S2-Pro using [Uzi Doorman (murder drones)](https://fish.audio/m/dbfcbb173fb84528ac4ccaf446026277/)
+- Walking: Inverse kinematics
+- Display: Loading icon and very basic lip-syncing
 
 ## CAD
 
 Uzi v0.1: See the `.step` and `.f3z` in the `cad` folder.
 
-![Uzi v0.1 CAD Preview](img/cad.png)
+![Uzi v0.1 CAD Preview](img/readme/cad.png)
 
 ## Assembly
 
@@ -166,7 +170,7 @@ echo "Setup complete! Note: Need to manually configure pins in jetson-io. See RE
 
 These pins need to be explicitly configured, ex: as GPIO, for them to work. Run this, edit the header manually, and match the text to the shown pins:
 
-![Desired Jetson IO Pin Configuration](img/jetson-io.png)
+![Desired Jetson IO Pin Configuration](img/readme/jetson-io.png)
 
 ```sh
 sudo /opt/nvidia/jetson-io/jetson-io.py
