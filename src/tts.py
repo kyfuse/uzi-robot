@@ -141,7 +141,7 @@ def _amplitude_worker() -> None:
         if _on_amplitude is None:
             continue
         smoothed = _AMP_SMOOTHING * smoothed + (1.0 - _AMP_SMOOTHING) * _latest_amp
-        if abs(smoothed - last_emitted) < 0.01 and smoothed < 0.01:
+        if abs(smoothed - last_emitted) < 0.01 and smoothed < 0.01 and last_emitted < 1e-6:
             continue
         last_emitted = smoothed
         try:

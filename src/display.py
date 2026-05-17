@@ -159,7 +159,7 @@ def draw_face(openness: float) -> None:
     Coalesces with any already-pending face frame, so high-frequency callers
     (e.g. the TTS amplitude callback) only ever render the latest frame.
     """
-    openness = max(0.0, min(1.0, float(openness**0.3)))
+    openness = max(0.0, min(1.0, float(openness**0.4)))
     _enqueue("face", lambda: _do_draw_face(openness), coalesce=True)
 
 
@@ -224,7 +224,7 @@ def _do_draw_face(openness: float) -> None:
     face_width = 42
     face_height = 21
     face = _UZI_IMAGE.crop((x, y, x + face_width, y + face_height))
-    if openness > 0.02:
+    if openness > 0.12:
         draw = ImageDraw.Draw(face)
         max_inset = face_height // 2
         inset = int(round((1.0 - openness) * max_inset))
@@ -234,6 +234,7 @@ def _do_draw_face(openness: float) -> None:
             outline=(33, 75, 86),
             width=2,
         )
+    log.debug(f"Drawing face with openness {openness:.4f}")
     _do_draw_image_rect(x, y, face)
 
 
